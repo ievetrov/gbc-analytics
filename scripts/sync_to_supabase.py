@@ -1,3 +1,17 @@
+"""
+Шаг 3 по ТЗ: Синхронизация заказов из RetailCRM в Supabase.
+
+Что делает скрипт:
+1. Загружает из mock_orders.json маппинг phone → utm_source
+   (RetailCRM не сохраняет кастомные поля в демо-аккаунте, берём из исходника)
+2. Забирает все заказы из RetailCRM API v5 с пагинацией
+3. Трансформирует каждый заказ: считает сумму, извлекает город, utm_source
+4. Делает upsert в таблицу orders в Supabase (обновляет если уже есть)
+
+Запуск: python3 scripts/sync_to_supabase.py
+Зависимости: pip install requests supabase python-dotenv
+"""
+
 import json
 import os
 from datetime import datetime, timedelta
@@ -5,6 +19,7 @@ import requests
 from supabase import create_client
 from dotenv import load_dotenv
 
+# Загружаем переменные из .env
 load_dotenv()
 
 RETAILCRM_URL = os.getenv("RETAILCRM_URL")
@@ -16,11 +31,15 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 MOCK_FILE = os.path.join(os.path.dirname(__file__), "..", "mock_orders.json")
 
+# Инициализируем клиент Supabase
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def load_mock_utm() -> dict:
-    """Загружает phone → utm_source из mock_orders.json."""
+    """
+    Читает mock_orders.json и строит словарь phone → utm_source.
+    Нужно потому что RetailCRM демо-аккаунт не хранит кастомные поля.
+    """
     with open(MOCK_FILE, encoding="utf-8") as f:
         mocks = json.load(f)
     return {
@@ -30,7 +49,11 @@ def load_mock_utm() -> dict:
 
 
 def fetch_all_orders() -> list:
-    """Забирает все заказы из RetailCRM с пагинацией."""
+    """
+    Забирает все заказы из RetailCRM через GET /api/v5/orders.
+    Обходит пагинацию — загружает по 100 заказов за запрос.
+    RetailCRM принимает limit только 20, 50 или 100.
+    """
     orders = []
     page = 1
 
@@ -61,12 +84,19 @@ def fetch_all_orders() -> list:
 
 
 def transform(order: dict, index: int, utm_map: dict) -> dict:
-    """Приводит заказ RetailCRM к формату таблицы Supabase."""
+    """
+    Преобразует заказ RetailCRM в строку для таблицы Supabase orders.
+    - Сумма считается как сумма (initialPrice * quantity) по всем товарам
+    - Город берётся из delivery.address.city
+    - utm_source ищется в utm_map по номеру телефона
+    - created_at распределяется по дням для красивого графика на дашборде
+    """
     items = order.get("items", [])
     total = sum(
         float(it.get("initialPrice", 0)) * int(it.get("quantity", 1))
         for it in items
     )
+    # Если items пустые — используем поле sumTotal из RetailCRM
     if total == 0:
         total = float(order.get("sumTotal", 0))
 
@@ -96,18 +126,25 @@ def transform(order: dict, index: int, utm_map: dict) -> dict:
 
 
 def upsert_to_supabase(rows: list) -> None:
+    """
+    Делает upsert в таблицу orders в Supabase.
+    Upsert = insert + update если запись с таким id уже существует.
+    """
     supabase.table("orders").upsert(rows).execute()
 
 
 def main():
+    # Шаг 1: загружаем utm_source из исходного файла
     print("Загружаем utm_source из mock_orders.json...")
     utm_map = load_mock_utm()
     print(f"  Загружено {len(utm_map)} соответствий phone → utm_source")
 
+    # Шаг 2: получаем актуальные заказы из RetailCRM
     print("\nПолучаем заказы из RetailCRM...")
     crm_orders = fetch_all_orders()
     print(f"Итого: {len(crm_orders)} заказов\n")
 
+    # Шаг 3: трансформируем и записываем в Supabase
     rows = [transform(o, i, utm_map) for i, o in enumerate(crm_orders)]
 
     print("Загружаем в Supabase...")
