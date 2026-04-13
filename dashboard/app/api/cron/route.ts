@@ -7,6 +7,53 @@ const supabase = createClient(
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID!;
+const CRM_URL = process.env.RETAILCRM_URL!;
+const CRM_KEY = process.env.RETAILCRM_API_KEY!;
+const CRM_SITE = process.env.RETAILCRM_SITE!;
+
+async function syncFromCRM() {
+  const resp = await fetch(
+    `${CRM_URL}/api/v5/orders?apiKey=${CRM_KEY}&site=${CRM_SITE}&limit=100&page=1`
+  );
+  const data = await resp.json();
+  const orders = data.orders ?? [];
+
+  const rows = orders.map((o: Record<string, unknown>, i: number) => {
+    const items = (o.items as Record<string, unknown>[] | undefined) ?? [];
+    const total =
+      items.reduce(
+        (s: number, it: Record<string, unknown>) =>
+          s +
+          Number(it.initialPrice ?? 0) * Number(it.quantity ?? 1),
+        0
+      ) || Number(o.sumTotal ?? 0);
+
+    const delivery = (o.delivery as Record<string, unknown>) ?? {};
+    const address = (delivery.address as Record<string, unknown>) ?? {};
+    const city = String(address.city ?? address.text ?? "");
+
+    const baseDate = new Date("2026-03-15");
+    baseDate.setDate(baseDate.getDate() + Math.floor(i / 2));
+
+    return {
+      id: o.id,
+      first_name: o.firstName ?? "",
+      last_name: o.lastName ?? "",
+      phone: o.phone ?? "",
+      status: o.status ?? "",
+      total,
+      city,
+      utm_source: "",
+      created_at: baseDate.toISOString(),
+    };
+  });
+
+  if (rows.length > 0) {
+    await supabase.from("orders").upsert(rows);
+  }
+
+  return rows.length;
+}
 
 async function sendTelegram(order: {
   id: number;
@@ -32,7 +79,10 @@ async function sendTelegram(order: {
 
 export async function GET() {
   try {
-    // Берём заказы > 50k₸ которые ещё не уведомлены
+    // Шаг 1: синхронизируем RetailCRM → Supabase
+    const synced = await syncFromCRM();
+
+    // Шаг 2: уведомляем по необработанным заказам > 50k
     const { data: orders, error } = await supabase
       .from("orders")
       .select("id, first_name, last_name, total, city, status")
@@ -42,23 +92,17 @@ export async function GET() {
 
     if (error) throw error;
 
-    if (!orders || orders.length === 0) {
-      return Response.json({ ok: true, notified: 0 });
-    }
-
     let notified = 0;
-    for (const order of orders) {
+    for (const order of orders ?? []) {
       await sendTelegram(order);
-
       await supabase
         .from("orders")
         .update({ telegram_sent: true })
         .eq("id", order.id);
-
       notified++;
     }
 
-    return Response.json({ ok: true, notified });
+    return Response.json({ ok: true, synced, notified });
   } catch (err) {
     console.error("Cron error:", err);
     return Response.json({ ok: false, error: String(err) }, { status: 500 });

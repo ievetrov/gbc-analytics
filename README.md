@@ -26,7 +26,13 @@ Supabase (PostgreSQL)
     ↓ @supabase/supabase-js
 Next.js Dashboard (Vercel)
 
-RetailCRM webhook → /api/webhook → Telegram Bot (заказы > 50 000 ₸)
+Vercel Cron (каждую минуту)
+    → /api/cron
+    → Supabase: заказы где total > 50k И telegram_sent = false
+    → Telegram Bot API → уведомление
+    → Supabase: telegram_sent = true
+
+(В продакшн-аккаунте RetailCRM: webhook → /api/webhook → мгновенно)
 ```
 
 ## Структура проекта
@@ -107,9 +113,14 @@ RetailCRM вернул ошибку `"OrderType" with "code"="eshop-individual" 
 *Решение:* Вручную выставил Framework Preset = Next.js в Settings → Build and Deployment.
 
 **Проблема 5: Webhooks в RetailCRM демо**
-В демо-аккаунте нет UI и API для webhooks. 
+В демо-аккаунте нет UI и API для webhooks — ни через интерфейс (раздела нет в меню), ни через API (`POST /api/v5/webhooks` → `API method not found`). Пробовал регистрацию через integration-modules API — модуль создался (`success: true`), но webhook-события всё равно не срабатывали.
 
-*Решение:* Протестировал endpoint `/api/webhook` прямым curl-запросом, имитирующим RetailCRM payload. В продакшне webhook подключается через Настройки → Интеграция → Webhooks.
+*Решение:* Вместо push-уведомлений (webhook) реализовал pull-подход — **Vercel Cron Job** (`/api/cron`, каждую минуту):
+1. Читает из Supabase заказы где `total > 50 000` и `telegram_sent = false`
+2. Для каждого отправляет уведомление в Telegram
+3. Помечает `telegram_sent = true`
+
+Это полностью автоматизировано — никакого ручного запуска. В продакшн-аккаунте RetailCRM webhook заменит cron и уведомления будут приходить мгновенно, а не с задержкой до 1 минуты.
 
 ### Что узнал в процессе
 
