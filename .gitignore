@@ -1,0 +1,16 @@
+# Публично НЕ пушится
+_internal/
+.env
+.env.local
+dashboard/.env.local
+dashboard/.next/
+
+# IDE
+.vscode/
+
+# AI-инструменты (внутренние)
+dashboard/AGENTS.md
+dashboard/CLAUDE.md
+
+# macOS
+.DS_Store
