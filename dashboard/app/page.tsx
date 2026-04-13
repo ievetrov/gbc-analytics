@@ -1,6 +1,8 @@
 import { supabase, type Order } from "@/lib/supabase";
 import Dashboard from "./Dashboard";
 
+export const dynamic = "force-dynamic";
+
 async function getOrders(): Promise<Order[]> {
   const { data, error } = await supabase
     .from("orders")
