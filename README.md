@@ -1,6 +1,6 @@
 # GBC Analytics — Тестовое задание
 
-Мини-дашборд заказов для GBC (бренд Tomyris). Реализован с помощью Claude Code CLI.
+Мини-дашборд заказов для GBC (бренд Tomyris). Реализован с помощью Cursor AI.
 
 **[→ Открыть дашборд](https://gbc-analytics.vercel.app)**
 
@@ -19,20 +19,20 @@
 
 ```
 mock_orders.json
-    ↓ scripts/upload_orders.py
+    ↓ scripts/upload_orders.py  (разово)
 RetailCRM API
-    ↓ scripts/sync_to_supabase.py
+    ↑↓ Vercel Cron /api/cron  (каждую минуту)
 Supabase (PostgreSQL)
     ↓ @supabase/supabase-js
-Next.js Dashboard (Vercel)
+Next.js Dashboard (Vercel) — force-dynamic, данные свежие при каждом запросе
 
-Vercel Cron (каждую минуту)
-    → /api/cron
-    → Supabase: заказы где total > 50k И telegram_sent = false
-    → Telegram Bot API → уведомление
-    → Supabase: telegram_sent = true
+Vercel Cron (каждую минуту) → /api/cron:
+  1. upsert заказов RetailCRM → Supabase
+  2. найти total > 50k И telegram_sent = false
+  3. → Telegram Bot API
+  4. пометить telegram_sent = true
 
-(В продакшн-аккаунте RetailCRM: webhook → /api/webhook → мгновенно)
+(В продакшн RetailCRM: событие заказа → webhook → /api/webhook → мгновенно)
 ```
 
 ## Структура проекта
@@ -41,14 +41,18 @@ Vercel Cron (каждую минуту)
 gbc-analytics/
 ├── scripts/
 │   ├── upload_orders.py       # Загрузка mock_orders.json → RetailCRM
-│   └── sync_to_supabase.py    # RetailCRM → Supabase
+│   └── sync_to_supabase.py    # Разовый синк RetailCRM → Supabase
 ├── dashboard/                 # Next.js приложение
 │   ├── app/
-│   │   ├── page.tsx           # Серверный компонент, загрузка данных
-│   │   ├── Dashboard.tsx      # Клиентский компонент с графиками
-│   │   └── api/webhook/
-│   │       └── route.ts       # Webhook: RetailCRM → Telegram
-│   └── lib/supabase.ts        # Supabase клиент
+│   │   ├── page.tsx           # Серверный компонент, загрузка данных из Supabase
+│   │   ├── Dashboard.tsx      # Клиентский компонент с графиками (Recharts)
+│   │   └── api/
+│   │       ├── cron/
+│   │       │   └── route.ts   # Cron: синк RetailCRM→Supabase + Telegram уведомления
+│   │       └── webhook/
+│   │           └── route.ts   # Webhook: RetailCRM → Telegram (для прод-аккаунта)
+│   ├── lib/supabase.ts        # Supabase клиент
+│   └── vercel.json            # Cron schedule (каждую минуту)
 ├── mock_orders.json           # 50 тестовых заказов
 └── supabase_schema.sql        # SQL схема таблицы orders
 ```
@@ -77,7 +81,7 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-## Как я работал с Claude Code
+## Как я работал с Cursor AI
 
 ### Промпты, которые дали хороший результат
 
@@ -132,7 +136,9 @@ RetailCRM вернул ошибку `"OrderType" with "code"="eshop-individual" 
 
 Полный автоматический цикл без единого ручного действия.
 
-### Что узнал в процессе принимает параметр `order` как JSON-строку внутри form-data, не как JSON body
+### Что узнал в процессе
+
+- RetailCRM API v5 принимает параметр `order` как JSON-строку внутри form-data, не как JSON body
 - Supabase JS v2 требует явный `.select()` после `.insert()` чтобы вернуть данные
 - Next.js 16 App Router: серверные компоненты (`async page.tsx`) и клиентские (`"use client"`) разделены — Recharts работает только в клиентском
 - Vercel определяет фреймворк по `package.json`, но при монорепо нужно выставить Root Directory и Framework Preset вручную
